@@ -1,0 +1,49 @@
+1.有三个线程去启动了Tomcat
+2.org.apache.catalina.startup.Bootstrap.initClassLoaders 分别设置了上下文类加载器(用于加载约定lib下的jar,打破双亲委派)
+
+> org.apache.catalina.startup.Bootstrap.start()  启动入口函数
+  > org.apache.catalina.startup.Bootstrap.init() 1.使用类加载器工厂创建不同的类加载器 2.构造 Catalina,反射调用其内部的start的方法
+    > org.apache.catalina.startup.Catalina.start 1.调用start(启动Acceptor(接受socket),SocketProcessor(处理socket，编解码，然后给线程给run，出来HttpReq，HttpResp))
+      > org.apache.catalina.startup.Catalina.load()
+        > org.apache.catalina.startup.Catalina.initDirs() 初始化临时目录
+        > org.apache.catalina.startup.Catalina.initNaming() 初始化命名
+        > org.apache.catalina.startup.Catalina.createStartDigester() 构造主要的启动者,设置了用来解析server.xml的参数
+        > org.apache.catalina.startup.Catalina.configFile() 根据约定规则去默认的base_home目录conf/server.xml去获取server.xml文件，下面使用org.xml.sax.InputSource解析该xml
+        > org.apache.tomcat.util.digester.Digester.parse(org.xml.sax.InputSource) 解析上一步的server文件,实例化Server,最终反射调用了org.apache.tomcat.util.IntrospectionUtils.callMethod1 调用setServer设置Server对象
+          > org.apache.catalina.startup.SetAllPropertiesRule.begin 设置HttpReq，HttpResp，用于之后的处理
+        > org.apache.catalina.Lifecycle.init() 初始化Server
+      > org.apache.catalina.Lifecycle.start() 启动Server
+        > org.apache.catalina.core.StandardServer.startInternal:413 循环启动所有的service(内部的engine+executors+mapperListener+connectors)都是调用其start方法
+          > org.apache.catalina.Lifecycle.start 循环启动service
+            > org.apache.catalina.util.LifecycleBase.start 循环启动connectors
+              > org.apache.coyote.ProtocolHandler.start 启动  ProtocolHandler 协议处理器
+                > org.apache.tomcat.util.net.NioEndpoint.startInternal 内部先启动(pollers，其次是启动所有的Acceptor，代码如下)
+                  >// Start poller threads
+                       pollers = new Poller[getPollerThreadCount()];
+                       for (int i=0; i<pollers.length; i++) {
+                           pollers[i] = new Poller();
+                           Thread pollerThread = new Thread(pollers[i], getName() + "-ClientPoller-"+i);
+                           pollerThread.setPriority(threadPriority);
+                           pollerThread.setDaemon(true);
+                           pollerThread.start();
+                       }
+                  //startAcceptorThreads();
+                  > org.apache.tomcat.util.net.NioEndpoint.Poller#run 开始通过 selector.selectNow || selector.select(selectorTimeout)监听
+                    > org.apache.tomcat.util.net.NioEndpoint.Poller#events 循环所有进来的event,异步执行,放入
+                      > org.apache.tomcat.util.net.NioEndpoint.PollerEvent#run 通过 socket.getIOChannel().keyFor(socket.getPoller().getSelector()) 处理某一个event
+                        > java.nio.channels.SelectionKey.interestOps(int)
+                    > org.apache.tomcat.util.net.NioEndpoint.Poller.processKey 处理NIO的selectKey
+                      > org.apache.tomcat.util.net.AbstractEndpoint.processSocket 进一步处理
+                        > org.apache.tomcat.util.net.SocketProcessorBase.run
+                          > org.apache.tomcat.util.net.SocketProcessorBase.doRun 此方法是抽象的,又此类实现例如 NioEndpoint，Nio2Endpoint，AprEndpoint
+                            > org.apache.coyote.Processor.process
+                              > org.apache.coyote.AbstractProcessorLight.service
+                                > org.apache.coyote.http11.Http11Processor.service 在这里开始解析协议
+                                  > org.apache.catalina.connector.CoyoteAdapter.postParseRequest 开始实现Request,Response
+                                    > org.apache.catalina.core.ApplicationFilterChain.internalDoFilter  Use potentially wrapped request from this point,Filter执行完毕就开始Servlet.service调用
+                                      > javax.servlet.Servlet#service 开始我们的应用
+                  > org.apache.tomcat.util.net.AbstractEndpoint.startAcceptorThreads 启动所有的Acceptor(请求入口接收者)
+      > java.lang.Runtime.addShutdownHook 添加钩子函数,如果应用被系统kill掉,这里就会调用stop方法优雅退出
+
+
+
